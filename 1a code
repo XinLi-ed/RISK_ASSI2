@@ -1,0 +1,222 @@
+import pandas as pd
+import xpress as xp
+import math
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Number of robots
+#nbRobots=1072
+nbRobots=24
+# maximum number of chargers
+m=8
+# maximum number of robots at a charger
+q=2
+# Charging station build cost
+Cb=5000
+# human penalty cost
+Ch=1000
+# Maintenance cost
+Cm=500
+# Charging cost
+Cc=0.42
+# Maximum range in km
+r_max=175*1.60934
+# Minimum range in km
+r_min=10*1.60934
+
+#  coordinates of robots
+df = pd.read_excel("Robot_Locations.xlsx")
+Rob_Long = df["Robot Longitude"].tolist()[:nbRobots]
+Rob_Lat = df["Robot Latitude"].tolist()[:nbRobots]
+
+# Get ranges of robots
+df = pd.read_excel("Robot_Ranges.xlsx")
+Rob_range = df["Robot Ranges"].tolist()[:nbRobots]
+
+# Maximum distance between two robots/stations
+M1 = math.sqrt(((min(Rob_Long)-max(Rob_Long))**2) + ((min(Rob_Lat)-max(Rob_Lat))**2))
+# # Upper bound for constraints later
+# M2=Ch + (M1+r_max)*Cc
+#Least number of open stations
+least=math.ceil(nbRobots/(m*q))
+
+Stations=range(nbRobots)
+Robots=range(nbRobots)
+
+prob = xp.problem("Assignment 2")
+# Initialize Variables
+X=prob.addVariables(Stations, name='X', vartype=xp.continuous)
+Y=prob.addVariables(Stations, name='Y', vartype=xp.continuous)
+z=prob.addVariables(Stations, name='z', vartype=xp.integer)
+w=prob.addVariables(Stations,Robots, name='w', vartype=xp.binary)
+d=prob.addVariables(Stations,Robots, name='d', vartype=xp.continuous)
+u=prob.addVariables(Stations,Robots, name='u', vartype=xp.binary)
+v=prob.addVariables(Stations, name='v', vartype=xp.binary)
+C1=prob.addVariables(Stations,Robots, name='C1', vartype=xp.continuous)
+C3=prob.addVariables(Stations,Robots, name='C3', vartype=xp.continuous)
+
+Cost = (Cb*xp.Sum(v[i] for i in Stations) + xp.Sum(Cm*z[i] for i in Stations))/365 + \
+      xp.Sum(C1[i,j] for i in Stations for j in Robots)
+
+prob.setObjective(Cost, sense=xp.minimize)
+
+#Constraints
+prob.addConstraint(d[i,j]==xp.sqrt((X[i]-Rob_Long[j])**2+((Y[i]-Rob_Lat[j])**2)) for i in Stations for j in Robots)
+
+prob.addConstraint(v[i]<=z[i]<=m*v[i] for i in Stations)
+
+prob.addConstraint(v[i] <= xp.Sum(w[i,j] for j in Robots) <= q*z[i] for i in Stations)
+
+prob.addConstraint(xp.Sum(w[i,j] for i in Stations) == 1 for j in Robots)
+
+prob.addConstraint(d[i,j]-Rob_range[j]<=M1*u[i,j] for i in Stations for j in Robots)
+
+prob.addConstraint(v[i-1]>=v[i] for i in Stations if i)
+
+prob.addConstraint(v[least]==1)
+
+prob.addConstraint(v[i]>=w[i,j] for i in Stations for j in Robots)
+
+prob.addConstraint(C1[i,j]<=max(Ch,(M1+r_max)*Cc)*w[i,j] for i in Stations for j in Robots)
+
+prob.addConstraint(C1[i,j]<=Cc*C3[i,j]+Ch*u[i,j] for i in Stations for j in Robots)
+
+prob.addConstraint(C1[i,j]>=Cc*C3[i,j]+Ch*u[i,j]-max(Ch,(M1+r_max)*Cc)*(1-w[i,j]) for i in Stations for j in Robots)
+
+prob.addConstraint(C3[i,j]<=r_max-Rob_range[j]+d[i,j] for i in Stations for j in Robots)
+
+prob.addConstraint(C3[i,j]<=(M1+r_max)*(1-u[i,j]) for i in Stations for j in Robots)
+
+prob.addConstraint(C3[i,j]>=r_max-Rob_range[j]+d[i,j]-(M1+r_max)*u[i,j] for i in Stations for j in Robots)
+
+for i in Stations:
+    X[i].lb = min(Rob_Long)
+    X[i].ub = max(Rob_Long)
+    Y[i].lb = min(Rob_Lat)
+    Y[i].ub = max(Rob_Lat)
+    z[i].lb = 0
+    z[i].ub = m
+    for j in Robots:
+        C1[i,j].lb = 0
+        C3[i,j].lb = 0
+        d[i,j].ub = M1
+        d[i,j].lb = 0
+
+#Redudant Constraints
+prob.addConstraint(xp.Sum(q*z[i] for i in Stations) >= nbRobots)
+prob.addConstraint(xp.Sum(w[i,j] for i in Stations for j in Robots) == nbRobots)
+
+
+prob.controls.maxtime = -60
+
+prob.solve()
+
+sol_status = prob.attributes.solstatus
+
+if sol_status == xp.SolStatus.OPTIMAL:
+    print("Optimal solution found")
+    best_obj = prob.attributes.objval
+    best_bound = prob.attributes.bestbound
+    mip_gap = abs(best_obj - best_bound) / (1e-10 +abs(best_obj))
+    print(f"MIP Gap: {mip_gap*100:.2f}%")
+    
+elif sol_status == xp.SolStatus.FEASIBLE:
+    print("Feasible solution (not proven optimal)")
+    best_obj = prob.attributes.objval
+    best_bound = prob.attributes.bestbound
+    mip_gap = abs(best_obj - best_bound) / (1e-10 +abs(best_obj))
+    print(f"MIP Gap: {mip_gap*100:.2f}%")
+elif sol_status == xp.SolStatus.INFEASIBLE:
+    print("Model is infeasible")
+elif sol_status == xp.SolStatus.UNBOUNDED:
+    print("Model is unbounded")
+else:
+    print("No solution available")
+    
+sol_status = prob.attributes.solstatus
+
+if sol_status in [xp.SolStatus.OPTIMAL, xp.SolStatus.FEASIBLE]:
+    print("Solution found!\n")
+    
+    # Objective value
+    print(f"Objective value: {prob.attributes.objval}\n")
+    
+    # Print scalar/vector variables
+    print("Station X coordinates:")
+    for i in Stations:
+        print(f"X[{i}] = {prob.getSolution(X[i])}")
+        
+    print("\nStation Y coordinates:")
+    for i in Stations:
+        print(f"Y[{i}] = {prob.getSolution(Y[i])}")
+        
+    print("\nStation Number of chargers in each station:")
+    for i in Stations:
+        print(f"z[{i}] = {prob.getSolution(z[i])}")
+        
+    print("\nStation Stations that we build:")
+    for i in Stations:
+        print(f"v[{i}] = {prob.getSolution(v[i])}")
+        
+    print("\nAssignment w[i,j] (station i serves robot j):")
+    for i in Stations:
+        for j in Robots:
+            if prob.getSolution(w[i,j])>0:
+                print(f"w[{i},{j}] = {prob.getSolution(w[i,j])}")
+            
+    # print("\nDistance d[i,j]:")
+    # for i in Stations:
+    #     for j in Robots:
+    #         print(f"d[{i},{j}] = {prob.getSolution(d[i,j])}")
+            
+    # print("\nBinary Stations not in range of robots:")
+    # for i in Stations:
+    #     for j in Robots:
+    #         if prob.getSolution(u[i,j])>0:
+    #             print(f"u[{i},{j}] = {prob.getSolution(u[i,j])}")
+    
+elif sol_status == xp.SolStatus.INFEASIBLE:
+    print("Model is infeasible")
+elif sol_status == xp.SolStatus.UNBOUNDED:
+    print("Model is unbounded")
+else:
+    print("No solution available")
+
+#Take solutions
+sol_x = prob.getSolution(X)
+sol_y = prob.getSolution(Y)
+sol_v = prob.getSolution(v)
+
+#Turn dictionaries into lists
+station_x_coords = {i: sol_x[i] for i in Stations}
+station_y_coords = {i: sol_y[i] for i in Stations}
+station_v_values = {i: sol_v[i] for i in Stations}
+
+#Opened stations
+open_station_x = [station_x_coords[i] for i in Stations if station_v_values[i] > 0]
+open_station_y = [station_y_coords[i] for i in Stations if station_v_values[i] > 0]
+
+plt.figure(figsize=(12, 10))
+
+#Draw opened stations with triangles
+if open_station_x:
+    plt.scatter(open_station_x, open_station_y, color='red', marker='^', 
+                label='Open Stations', s=200, edgecolors='black', zorder=5)
+
+#Draw robots with blue circles
+plt.scatter(Rob_Long, Rob_Lat, color='blue', marker='o', label='Robots', s=30, alpha=0.5)
+
+#Draw lines for assignments
+for i in Stations:
+    for j in Robots:
+        if prob.getSolution(w[i,j]) > 0:
+            plt.plot([station_x_coords[i], Rob_Long[j]], 
+                     [station_y_coords[i], Rob_Lat[j]], 
+                     color='green', alpha=0.3, linewidth=1)
+
+plt.title('Final Robot Assignment Map')
+plt.xlabel('Longitude')
+plt.ylabel('Latitude')
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.show()
