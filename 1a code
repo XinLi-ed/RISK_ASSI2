@@ -106,8 +106,8 @@ for i in Stations:
 prob.addConstraint(xp.Sum(q*z[i] for i in Stations) >= nbRobots)
 prob.addConstraint(xp.Sum(w[i,j] for i in Stations for j in Robots) == nbRobots)
 
-
-prob.controls.maxtime = -60
+# run for only - X seconds
+# prob.controls.maxtime = -60
 
 prob.solve()
 
